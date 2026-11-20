@@ -1,30 +1,1154 @@
-'use client';
-import {useCallback,useEffect,useRef,useState} from 'react';
-import Link from 'next/link';
-import {usePathname,useRouter} from 'next/navigation';
-import {Activity,Armchair,BarChart3,CalendarDays,Check,CheckCircle2,ClipboardList,Download,Eye,FileText,LayoutDashboard,Loader2,MapPin,Plus,Receipt,RefreshCw,ScanLine,Settings,ShieldCheck,Ticket,TrendingUp,Users,Wallet,AlertCircle,Camera,X,Music2} from 'lucide-react';
-import {api,date,json,money,time,utc} from '@/lib/api';
-import type {EventItem,Event,Order,Venue,Refund} from '@/lib/types';
-import {useApp} from './providers';
-import {Badge,Empty,ErrorState,Field,Guard,Loading,Modal} from './ui';
-export function DashboardShell({children,admin=false}:{children:React.ReactNode;admin?:boolean}){const path=usePathname();const nav=admin?[{href:'/admin',label:'Operations',icon:Activity},{href:'/admin?tab=payments',label:'Payments & recovery',icon:Wallet},{href:'/admin?tab=refunds',label:'Refund reviews',icon:Receipt},{href:'/admin?tab=users',label:'People & access',icon:Users},{href:'/admin?tab=audit',label:'Audit trail',icon:ClipboardList}]:[{href:'/organizer',label:'Overview',icon:LayoutDashboard},{href:'/organizer/events',label:'My events',icon:CalendarDays},{href:'/organizer/venues',label:'Venues',icon:MapPin},{href:'/check-in',label:'Venue check-in',icon:ScanLine}];return <div className="dashboard-shell"><aside className="dashboard-sidebar"><span className="eyebrow">{admin?'PLATFORM OPERATIONS':'ORGANIZER WORKSPACE'}</span>{nav.map(x=><Link key={x.href} href={x.href} className={path===x.href?'active':''}><x.icon size={18}/>{x.label}</Link>)}<span className="sidebar-separator"/><Link href={admin?'/organizer':'/account'}><Settings size={18}/>{admin?'Organizer workspace':'Account settings'}</Link><Link href="/events"><Ticket size={18}/>Explore events</Link><div className="sidebar-bottom">A little help goes a long way.<Link href="/help">Visit the help center</Link></div></aside><div className="dashboard-main">{children}</div></div>;}
-function Stat({label,value,detail,icon:Icon}:{label:string;value:string|number;detail:string;icon:typeof Ticket}){return <div className="stat-card"><span className="stat-label">{label}<Icon size={18}/></span><strong>{value}</strong><small>{detail}</small></div>;}
-type Overview={revenue:number;ticketsSold:number;totalEvents:number;occupancy:number;checkedIn:number;chart:{date:string;revenue:number;tickets:number}[];recentOrders:{order:Order;eventTitle:string}[]};
-export function OrganizerPage(){const{user,loading,refresh,notify}=useApp(),router=useRouter(),[busy,setBusy]=useState(false);if(loading)return <Loading/>;if(!user)return <div className="organizer-welcome"><span className="organizer-icon"><Music2 size={38}/></span><span className="eyebrow">BIG IDEAS DESERVE A FULL HOUSE</span><h1>Bring your people together.</h1><p>Create an event, make every seat count, and keep the whole experience in one place. From the first booking to the last person through the door.</p><Link className="button" href="/login?next=/organizer">Start organizing</Link><p>New to EventHub? <Link className="text-link" href="/register">Create your account</Link></p></div>;if(user.role==='Customer')return <div className="organizer-welcome"><span className="organizer-icon"><CalendarDays size={38}/></span><span className="eyebrow">YOUR IDEA. THEIR NEXT GREAT NIGHT.</span><h1>Let’s make it happen.</h1><p>Open your organizer workspace to create events, choose venues, set seat prices, follow ticket sales, and welcome your guests.</p><button className="button" disabled={busy} onClick={async()=>{setBusy(true);try{await api('/account/organizer',{method:'POST'});await refresh();router.refresh();notify('Your organizer workspace is ready.');}catch(e){notify((e as Error).message,true);}finally{setBusy(false);}}}>{busy?'Opening your workspace…':'Become an organizer'}</button></div>;return <Guard roles={['Organizer','Admin']}><DashboardShell><OrganizerOverview/></DashboardShell></Guard>;}
-function OrganizerOverview(){const{user}=useApp(),[overview,setOverview]=useState<Overview>(),[events,setEvents]=useState<EventItem[]>([]),[error,setError]=useState('');useEffect(()=>{Promise.all([api<Overview>('/organizer/overview').then(setOverview),api<EventItem[]>('/organizer/events').then(setEvents)]).catch(e=>setError(e.message));},[]);if(error)return <ErrorState message={error}/>;if(!overview)return <Loading text="Opening your workspace…"/>;const max=Math.max(...overview.chart.map(x=>x.revenue),1);return <><div className="dashboard-title"><div><span className="eyebrow">YOUR EVENTS. THE BIGGER PICTURE.</span><h1>Hello, {user?.name.split(' ')[0]} <span className="title-spark">✳</span></h1><p>Here’s what’s happening with your events.</p></div><Link className="button" href="/organizer/events/new"><Plus size={17}/> Create an event</Link></div><div className="stats-grid"><Stat label="Total revenue" value={money(overview.revenue)} detail="Confirmed bookings, including fees" icon={Wallet}/><Stat label="Tickets sold" value={overview.ticketsSold} detail="Active tickets across your events" icon={Ticket}/><Stat label="Your events" value={overview.totalEvents} detail="All events in your workspace" icon={CalendarDays}/><Stat label="Seat occupancy" value={overview.occupancy+'%'} detail="Sold seats / all event seats" icon={Armchair}/></div><div className="dashboard-panels"><section className="panel chart-panel"><div className="chart-heading"><div><h2>A week of good plans</h2><p>Confirmed ticket revenue</p></div><span>Last 7 days · UTC</span></div><div className="bar-chart" role="img" aria-label={'Daily confirmed revenue: '+overview.chart.map(x=>x.date+': '+money(x.revenue)).join(', ')}>{overview.chart.map(x=><div className="bar-column" key={x.date}><div className="bar" style={{height:Math.max(2,x.revenue/max*100)+'%'}} data-value={money(x.revenue)}/><span>{new Date(x.date+'T00:00:00Z').toLocaleDateString('en-GB',{weekday:'short',timeZone:'UTC'})}</span></div>)}</div><div className="chart-note"><span/>Revenue from confirmed orders</div>{overview.revenue===0&&<p className="empty-label">Your first booking will bring this chart to life.</p>}</section><section className="panel activity-panel"><h2>The latest moments</h2><p>Recent bookings, as they happen.</p>{overview.recentOrders.length?overview.recentOrders.slice(0,4).map(({order:o,eventTitle})=><div className="mini-order" key={o.id}><div><strong>{eventTitle}</strong><span>{date(o.createdAt,{year:undefined})} · {o.id.slice(0,6)}</span></div><Badge status={o.status}/></div>):<div className="activity-empty"><Ticket size={30}/><span>Your bookings will appear here.<br/>Every great event starts with the first ticket.</span></div>}</section></div><div className="dashboard-section-header"><h2>Your events</h2><Link className="text-link" href="/organizer/events">View all events</Link></div>{events.length?<EventTable items={events.slice(0,5)}/>:<Empty title="Your next big thing starts here" text="Create your first event and give people something to look forward to." action="Create an event" href="/organizer/events/new"/>}</>;}
-function EventTable({items}:{items:EventItem[]}){return <div className="panel table-wrap"><table><thead><tr><th>Event</th><th>Date</th><th>Tickets sold</th><th>Status</th><th/></tr></thead><tbody>{items.map(({ev,venue,capacity,sold})=><tr key={ev.id}><td><div className="manage-event-title"><img src={ev.image} alt=""/><span><strong>{ev.title}</strong><small>{venue.name}, {venue.city}</small></span></div></td><td>{date(ev.startsAt,{year:undefined})}<br/><small>{time(ev.startsAt)} BST</small></td><td><strong>{sold||0}</strong> / {capacity}</td><td><Badge status={ev.status}/></td><td><Link className="text-link" href={'/organizer/events/'+ev.id}>Manage</Link></td></tr>)}</tbody></table></div>;}
-export function OrganizerEvents(){return <Guard roles={['Organizer','Admin']}><DashboardShell><OrganizerEventsContent/></DashboardShell></Guard>;}
-function OrganizerEventsContent(){const[events,setEvents]=useState<EventItem[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true),[filter,setFilter]=useState('ALL'),[q,setQ]=useState('');useEffect(()=>{api<EventItem[]>('/organizer/events').then(setEvents).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[]);return <><div className="dashboard-title"><div><span className="eyebrow">WHERE GOOD IDEAS BECOME GREAT EVENTS</span><h1>Your events.</h1><p>A full view of everything you’re bringing to life.</p></div><Link className="button" href="/organizer/events/new"><Plus size={17}/>Create event</Link></div><div className="page-tabs">{['ALL','PUBLISHED','DRAFT','CANCELLED'].map(f=><button className={filter===f?'active':''} key={f} onClick={()=>setFilter(f)}>{f==='ALL'?'All events':f.toLowerCase()}</button>)}</div><Field label="Find an event"><input placeholder="Search by name…" value={q} onChange={e=>setQ(e.target.value)}/></Field>{loading?<Loading/>:error?<ErrorState message={error}/>:events.filter(x=>(filter==='ALL'||x.ev.status===filter)&&x.ev.title.toLowerCase().includes(q.toLowerCase())).length?<EventTable items={events.filter(x=>(filter==='ALL'||x.ev.status===filter)&&x.ev.title.toLowerCase().includes(q.toLowerCase()))}/>:<Empty title="A little room for something new" text="Your events will appear here. Let’s bring your next idea to life." action="Create an event" href="/organizer/events/new"/>}</>;}
-type EventFormState={title:string;artist:string;category:string;description:string;venueId:number;startsAt:string;endsAt:string;minPrice:number;image:string;queueEnabled:boolean;featured:boolean;status:string};
-const covers=['concert','festival','comedy','tech','theatre','food','sports','jazz'];
-const initial:EventFormState={title:'',artist:'',category:'Music',description:'',venueId:1,startsAt:'',endsAt:'',minPrice:1500,image:'/images/concert.jpg',queueEnabled:false,featured:false,status:'DRAFT'};
-function localInput(value:string){return new Date(new Date(utc(value)).getTime()+6*60*60*1000).toISOString().slice(0,16);}
-export function EventEditor({id}:{id?:number}){return <Guard roles={['Organizer','Admin']}><DashboardShell><EventEditorContent id={id}/></DashboardShell></Guard>;}
-function EventEditorContent({id}:{id?:number}){const router=useRouter(),{notify}=useApp(),[form,setForm]=useState<EventFormState>(initial),[venues,setVenues]=useState<Venue[]>([]),[current,setCurrent]=useState<EventItem>(),[loading,setLoading]=useState(!!id),[busy,setBusy]=useState(false),[error,setError]=useState(''),[tab,setTab]=useState('details'),[attendees,setAttendees]=useState<{id:string;name:string;email:string;seat:string;section:string;status:string}[]>([]),[price,setPrice]=useState(1500),[section,setSection]=useState('Standard'),[cancel,setCancel]=useState(false),[reason,setReason]=useState('');useEffect(()=>{api<Venue[]>('/venues').then(setVenues).catch(e=>setError(e.message));if(id)api<EventItem[]>('/organizer/events').then(items=>{const item=items.find(x=>x.ev.id===id);if(!item)throw new Error('Event not found.');setCurrent(item);const e=item.ev;setForm({...e,startsAt:localInput(e.startsAt),endsAt:localInput(e.endsAt),minPrice:e.minPrice/100});}).catch(e=>setError(e.message)).finally(()=>setLoading(false));},[id]);useEffect(()=>{if(id&&tab==='attendees')api<typeof attendees>(`/organizer/events/${id}/attendees`).then(setAttendees).catch(e=>notify(e.message,true));},[id,tab,notify]);function set<K extends keyof EventFormState>(key:K,value:EventFormState[K]){setForm(old=>({...old,[key]:value}));}
-async function save(e:React.FormEvent){e.preventDefault();setBusy(true);setError('');try{const data={...form,minPrice:Math.round(form.minPrice*100),startsAt:new Date(form.startsAt+'+06:00').toISOString(),endsAt:new Date(form.endsAt+'+06:00').toISOString()};await api('/organizer/events'+(id?'/'+id:''),{method:id?'PUT':'POST',body:json(data)});notify(id?'Your event is up to date.':form.status==='PUBLISHED'?'Your event is live. Let the good times begin.':'Your draft is saved.');router.push('/organizer/events');}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
-async function updatePrices(e:React.FormEvent){e.preventDefault();setBusy(true);try{const r=await api<{updated:number}>(`/organizer/events/${id}/prices`,{method:'PUT',body:json({section,price:Math.round(price*100)})});notify(`Updated prices for ${r.updated} available seats.`);}catch(e){notify((e as Error).message,true);}finally{setBusy(false);}}
-async function cancelEvent(e:React.FormEvent){e.preventDefault();setBusy(true);try{await api(`/organizer/events/${id}/cancel`,{method:'POST',body:json({reason})});notify('Event cancelled. Refund requests have been created for confirmed bookings.');router.push('/organizer/events');}catch(e){notify((e as Error).message,true);}finally{setBusy(false);}}
-function csv(){const rows=[['Name','Email','Section','Seat','Status'],...attendees.map(a=>[a.name,a.email,a.section,a.seat,a.status])];const encode=(s:string)=>'"'+s.replaceAll('"','""').replace(/^[=+@-]/,"'$&")+'"';const blob=new Blob([rows.map(r=>r.map(encode).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`event-${id}-attendees.csv`;a.click();URL.revokeObjectURL(url);}
-if(loading)return <Loading/>;if(error&&!venues.length)return <ErrorState message={error}/>;return <><div className="dashboard-title"><div><span className="eyebrow">MAKE ROOM FOR A FULL HOUSE</span><h1>{id?'Make it even better.':'Bring your idea to life.'}</h1><p>{id?form.title:'A few details now. Great memories later.'}</p></div>{id&&form.status==='PUBLISHED'&&<Link className="button button-outline" href={'/events/'+id}><Eye size={16}/>View event</Link>}</div>{id&&<div className="page-tabs">{['details','pricing','attendees'].map(t=><button key={t} className={tab===t?'active':''} onClick={()=>setTab(t)}>{t==='details'?'Event details':t==='pricing'?'Seat pricing':'Attendees'}</button>)}</div>}{tab==='details'?<form className="event-form" onSubmit={save}><section className="panel"><h2>The essentials</h2><div className="form-grid"><Field label="Event name"><input required minLength={3} maxLength={150} placeholder="Give your next great night a name" value={form.title} onChange={e=>set('title',e.target.value)}/></Field><Field label="Artist / host"><input required minLength={2} maxLength={200} placeholder="Who’s making it happen?" value={form.artist} onChange={e=>set('artist',e.target.value)}/></Field><Field label="Category"><select value={form.category} onChange={e=>set('category',e.target.value)}>{['Music','Comedy','Technology','Arts & Theatre','Food & Culture','Sports'].map(c=><option key={c}>{c}</option>)}</select></Field><Field label="Venue"><select value={form.venueId} onChange={e=>set('venueId',Number(e.target.value))}>{venues.map(v=><option key={v.id} value={v.id}>{v.name} · {v.city}</option>)}</select></Field><div className="form-wide"><Field label="Tell the story" hint="Help your guests picture themselves there."><textarea required minLength={20} maxLength={6000} value={form.description} onChange={e=>set('description',e.target.value)} placeholder="What makes this experience worth being there for?"/></Field></div></div><span className="field">Choose your cover</span><div className="cover-options">{covers.map(c=><button type="button" key={c} className={form.image===`/images/${c}.jpg`?'selected':''} aria-label={`Select ${c} cover`} aria-pressed={form.image===`/images/${c}.jpg`} onClick={()=>set('image',`/images/${c}.jpg`)}><img src={`/images/${c}.jpg`} alt={c}/></button>)}</div></section><section className="panel"><h2>The when and the how much</h2><div className="form-grid"><Field label="Starts at (Bangladesh time, UTC+6)"><input type="datetime-local" required value={form.startsAt} onChange={e=>set('startsAt',e.target.value)}/></Field><Field label="Ends at (Bangladesh time, UTC+6)"><input type="datetime-local" required value={form.endsAt} onChange={e=>set('endsAt',e.target.value)}/></Field><Field label="Standard ticket price (৳)" hint="Premium = 1.5×, VIP = 2×. Customize available seats in Pricing."><input type="number" required min={1} max={500000} step="0.01" value={form.minPrice} onChange={e=>set('minPrice',Number(e.target.value))}/></Field><Field label="Publication"><select value={form.status==='CANCELLED'?'DRAFT':form.status} onChange={e=>set('status',e.target.value)}><option value="DRAFT">Save as draft</option><option value="PUBLISHED">Published · open for bookings</option></select></Field></div><label className="checkbox-field"><input type="checkbox" checked={form.queueEnabled} onChange={e=>set('queueEnabled',e.target.checked)}/><span>Enable the waiting room for high-demand ticket releases.</span></label><label className="checkbox-field"><input type="checkbox" checked={form.featured} onChange={e=>set('featured',e.target.checked)}/><span>Feature this event in the spotlight.</span></label><p className="inline-info"><ShieldCheck size={15}/>Prices are stored in minor units. A transparent 5% service fee is added at checkout.</p></section>{error&&<p className="form-error" role="alert">{error}</p>}<div className="form-actions">{id&&current?.ev.status!=='CANCELLED'&&<button type="button" className="text-link text-danger" onClick={()=>setCancel(true)}>Cancel event</button>}<Link className="button button-outline" href="/organizer/events">Back to events</Link><button className="button" disabled={busy||current?.ev.status==='CANCELLED'}>{busy?<Loader2 className="spin" size={17}/>:<Check size={17}/>} {id?'Save changes':form.status==='PUBLISHED'?'Publish event':'Save draft'}</button></div></form>:tab==='pricing'?<section className="panel account-panel"><h2>A price for every experience</h2><p>Update the price of available seats. Existing reservations and sold tickets keep their original prices.</p><form onSubmit={updatePrices}><Field label="Seat section"><select value={section} onChange={e=>setSection(e.target.value)}>{['Standard','Premium','VIP'].map(s=><option key={s}>{s}</option>)}</select></Field><Field label="New price (৳)"><input type="number" required min={1} max={1000000} step="0.01" value={price} onChange={e=>setPrice(Number(e.target.value))}/></Field><button className="button" disabled={busy}>{busy?'Updating…':'Update available seats'}</button></form></section>:<><div className="dashboard-section-header"><h2>{attendees.length} guests on the list</h2><button className="button button-outline button-small" onClick={csv} disabled={!attendees.length}><Download size={15}/>Export CSV</button></div>{attendees.length?<div className="panel table-wrap"><table><thead><tr><th>Guest</th><th>Email</th><th>Seat</th><th>Status</th></tr></thead><tbody>{attendees.map(a=><tr key={a.id}><td><strong>{a.name}</strong></td><td>{a.email}</td><td>{a.section} · {a.seat}</td><td><Badge status={a.status}/></td></tr>)}</tbody></table></div>:<Empty title="Your guest list is waiting" text="When the first tickets are booked, you’ll find your guests here."/>}</>}{cancel&&<Modal title="Cancel this event?" onClose={()=>setCancel(false)}><p>This closes new bookings and creates refund requests for confirmed orders. Administrators must approve the refunds. This cannot be undone.</p><form onSubmit={cancelEvent}><Field label="Reason for cancellation"><textarea required minLength={5} maxLength={500} value={reason} onChange={e=>setReason(e.target.value)}/></Field><button className="button button-full" disabled={busy}>{busy?'Cancelling…':'Confirm event cancellation'}</button></form></Modal>}</>;}
-export function VenuesPage(){return <Guard roles={['Organizer','Admin']}><DashboardShell><VenuesContent/></DashboardShell></Guard>;}
-function VenuesContent(){const{notify}=useApp(),[venues,setVenues]=useState<Venue[]>([]),[open,setOpen]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState(''),[form,setForm]=useState({name:'',city:'Dhaka',address:'',timeZone:'Asia/Dhaka',rows:10,seatsPerRow:12});const load=useCallback(()=>api<Venue[]>('/venues').then(setVenues),[]);useEffect(()=>{void load().catch(e=>setError(e.message));},[load]);async function create(e:React.FormEvent){e.preventDefault();setBusy(true);try{await api('/organizer/venues',{method:'POST',body:json(form)});await load();setOpen(false);notify('Your venue is ready for its next event.');}catch(e){notify((e as Error).message,true);}finally{setBusy(false);}}return <><div className="dashboard-title"><div><span className="eyebrow">GREAT MOMENTS NEED THE RIGHT PLACE</span><h1>Your venues.</h1><p>Every seat, thoughtfully mapped.</p></div><button className="button" onClick={()=>setOpen(true)}><Plus size={16}/>Add venue</button></div>{error?<ErrorState message={error}/>:<div className="venue-cards">{venues.map(v=><article className="panel venue-card" key={v.id}><MapPin size={30}/><h3>{v.name}</h3><p>{v.address}</p><p>{v.city} · {v.timeZone}</p><div className="ticket-perforation"/><small>{v.rows} rows × {v.seatsPerRow} seats · {v.rows*v.seatsPerRow} capacity</small></article>)}</div>}{open&&<Modal title="A new place for good times" onClose={()=>setOpen(false)}><form onSubmit={create}><Field label="Venue name"><input required minLength={3} maxLength={120} value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></Field><Field label="City"><input required minLength={2} maxLength={80} value={form.city} onChange={e=>setForm({...form,city:e.target.value})}/></Field><Field label="Full address"><input required minLength={5} maxLength={300} value={form.address} onChange={e=>setForm({...form,address:e.target.value})}/></Field><Field label="Time zone"><input required value={form.timeZone} onChange={e=>setForm({...form,timeZone:e.target.value})}/></Field><div className="form-grid"><Field label="Rows (1–26)"><input type="number" required min={1} max={26} value={form.rows} onChange={e=>setForm({...form,rows:Number(e.target.value)})}/></Field><Field label="Seats per row (1–40)"><input type="number" required min={1} max={40} value={form.seatsPerRow} onChange={e=>setForm({...form,seatsPerRow:Number(e.target.value)})}/></Field></div><button className="button button-full" disabled={busy}>{busy?'Creating…':'Create venue'}</button></form></Modal>}</>;}
+"use client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  Activity,
+  Armchair,
+  BarChart3,
+  CalendarDays,
+  Check,
+  CheckCircle2,
+  ClipboardList,
+  Download,
+  Eye,
+  FileText,
+  LayoutDashboard,
+  Loader2,
+  MapPin,
+  Plus,
+  Receipt,
+  RefreshCw,
+  ScanLine,
+  Settings,
+  ShieldCheck,
+  Ticket,
+  TrendingUp,
+  Users,
+  Wallet,
+  AlertCircle,
+  Camera,
+  X,
+  Music2,
+} from "lucide-react";
+import { api, date, json, money, time, utc } from "@/lib/api";
+import type { EventItem, Event, Order, Venue, Refund } from "@/lib/types";
+import { useApp } from "./providers";
+import { Badge, Empty, ErrorState, Field, Guard, Loading, Modal } from "./ui";
+export function DashboardShell({
+  children,
+  admin = false,
+}: {
+  children: React.ReactNode;
+  admin?: boolean;
+}) {
+  const path = usePathname();
+  const nav = admin
+    ? [
+        { href: "/admin", label: "Operations", icon: Activity },
+        {
+          href: "/admin?tab=payments",
+          label: "Payments & recovery",
+          icon: Wallet,
+        },
+        { href: "/admin?tab=refunds", label: "Refund reviews", icon: Receipt },
+        { href: "/admin?tab=users", label: "People & access", icon: Users },
+        { href: "/admin?tab=audit", label: "Audit trail", icon: ClipboardList },
+      ]
+    : [
+        { href: "/organizer", label: "Overview", icon: LayoutDashboard },
+        { href: "/organizer/events", label: "My events", icon: CalendarDays },
+        { href: "/organizer/venues", label: "Venues", icon: MapPin },
+        { href: "/check-in", label: "Venue check-in", icon: ScanLine },
+      ];
+  return (
+    <div className="dashboard-shell">
+      <aside className="dashboard-sidebar">
+        <span className="eyebrow">
+          {admin ? "PLATFORM OPERATIONS" : "ORGANIZER WORKSPACE"}
+        </span>
+        {nav.map((x) => (
+          <Link
+            key={x.href}
+            href={x.href}
+            className={path === x.href ? "active" : ""}
+          >
+            <x.icon size={18} />
+            {x.label}
+          </Link>
+        ))}
+        <span className="sidebar-separator" />
+        <Link href={admin ? "/organizer" : "/account"}>
+          <Settings size={18} />
+          {admin ? "Organizer workspace" : "Account settings"}
+        </Link>
+        <Link href="/events">
+          <Ticket size={18} />
+          Explore events
+        </Link>
+        <div className="sidebar-bottom">
+          A little help goes a long way.
+          <Link href="/help">Visit the help center</Link>
+        </div>
+      </aside>
+      <div className="dashboard-main">{children}</div>
+    </div>
+  );
+}
+function Stat({
+  label,
+  value,
+  detail,
+  icon: Icon,
+}: {
+  label: string;
+  value: string | number;
+  detail: string;
+  icon: typeof Ticket;
+}) {
+  return (
+    <div className="stat-card">
+      <span className="stat-label">
+        {label}
+        <Icon size={18} />
+      </span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </div>
+  );
+}
+type Overview = {
+  revenue: number;
+  ticketsSold: number;
+  totalEvents: number;
+  occupancy: number;
+  checkedIn: number;
+  chart: { date: string; revenue: number; tickets: number }[];
+  recentOrders: { order: Order; eventTitle: string }[];
+};
+export function OrganizerPage() {
+  const { user, loading, refresh, notify } = useApp(),
+    router = useRouter(),
+    [busy, setBusy] = useState(false);
+  if (loading) return <Loading />;
+  if (!user)
+    return (
+      <div className="organizer-welcome">
+        <span className="organizer-icon">
+          <Music2 size={38} />
+        </span>
+        <span className="eyebrow">BIG IDEAS DESERVE A FULL HOUSE</span>
+        <h1>Bring your people together.</h1>
+        <p>
+          Create an event, make every seat count, and keep the whole experience
+          in one place. From the first booking to the last person through the
+          door.
+        </p>
+        <Link className="button" href="/login?next=/organizer">
+          Start organizing
+        </Link>
+        <p>
+          New to EventHub?{" "}
+          <Link className="text-link" href="/register">
+            Create your account
+          </Link>
+        </p>
+      </div>
+    );
+  if (user.role === "Customer")
+    return (
+      <div className="organizer-welcome">
+        <span className="organizer-icon">
+          <CalendarDays size={38} />
+        </span>
+        <span className="eyebrow">YOUR IDEA. THEIR NEXT GREAT NIGHT.</span>
+        <h1>Let’s make it happen.</h1>
+        <p>
+          Open your organizer workspace to create events, choose venues, set
+          seat prices, follow ticket sales, and welcome your guests.
+        </p>
+        <button
+          className="button"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await api("/account/organizer", { method: "POST" });
+              await refresh();
+              router.refresh();
+              notify("Your organizer workspace is ready.");
+            } catch (e) {
+              notify((e as Error).message, true);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "Opening your workspace…" : "Become an organizer"}
+        </button>
+      </div>
+    );
+  return (
+    <Guard roles={["Organizer", "Admin"]}>
+      <DashboardShell>
+        <OrganizerOverview />
+      </DashboardShell>
+    </Guard>
+  );
+}
+function OrganizerOverview() {
+  const { user } = useApp(),
+    [overview, setOverview] = useState<Overview>(),
+    [events, setEvents] = useState<EventItem[]>([]),
+    [error, setError] = useState("");
+  useEffect(() => {
+    Promise.all([
+      api<Overview>("/organizer/overview").then(setOverview),
+      api<EventItem[]>("/organizer/events").then(setEvents),
+    ]).catch((e) => setError(e.message));
+  }, []);
+  if (error) return <ErrorState message={error} />;
+  if (!overview) return <Loading text="Opening your workspace…" />;
+  const max = Math.max(...overview.chart.map((x) => x.revenue), 1);
+  return (
+    <>
+      <div className="dashboard-title">
+        <div>
+          <span className="eyebrow">YOUR EVENTS. THE BIGGER PICTURE.</span>
+          <h1>
+            Hello, {user?.name.split(" ")[0]}{" "}
+            <span className="title-spark">✳</span>
+          </h1>
+          <p>Here’s what’s happening with your events.</p>
+        </div>
+        <Link className="button" href="/organizer/events/new">
+          <Plus size={17} /> Create an event
+        </Link>
+      </div>
+      <div className="stats-grid">
+        <Stat
+          label="Total revenue"
+          value={money(overview.revenue)}
+          detail="Confirmed bookings, including fees"
+          icon={Wallet}
+        />
+        <Stat
+          label="Tickets sold"
+          value={overview.ticketsSold}
+          detail="Active tickets across your events"
+          icon={Ticket}
+        />
+        <Stat
+          label="Your events"
+          value={overview.totalEvents}
+          detail="All events in your workspace"
+          icon={CalendarDays}
+        />
+        <Stat
+          label="Seat occupancy"
+          value={overview.occupancy + "%"}
+          detail="Sold seats / all event seats"
+          icon={Armchair}
+        />
+      </div>
+      <div className="dashboard-panels">
+        <section className="panel chart-panel">
+          <div className="chart-heading">
+            <div>
+              <h2>A week of good plans</h2>
+              <p>Confirmed ticket revenue</p>
+            </div>
+            <span>Last 7 days · UTC</span>
+          </div>
+          <div
+            className="bar-chart"
+            role="img"
+            aria-label={
+              "Daily confirmed revenue: " +
+              overview.chart
+                .map((x) => x.date + ": " + money(x.revenue))
+                .join(", ")
+            }
+          >
+            {overview.chart.map((x) => (
+              <div className="bar-column" key={x.date}>
+                <div
+                  className="bar"
+                  style={{ height: Math.max(2, (x.revenue / max) * 100) + "%" }}
+                  data-value={money(x.revenue)}
+                />
+                <span>
+                  {new Date(x.date + "T00:00:00Z").toLocaleDateString("en-GB", {
+                    weekday: "short",
+                    timeZone: "UTC",
+                  })}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="chart-note">
+            <span />
+            Revenue from confirmed orders
+          </div>
+          {overview.revenue === 0 && (
+            <p className="empty-label">
+              Your first booking will bring this chart to life.
+            </p>
+          )}
+        </section>
+        <section className="panel activity-panel">
+          <h2>The latest moments</h2>
+          <p>Recent bookings, as they happen.</p>
+          {overview.recentOrders.length ? (
+            overview.recentOrders
+              .slice(0, 4)
+              .map(({ order: o, eventTitle }) => (
+                <div className="mini-order" key={o.id}>
+                  <div>
+                    <strong>{eventTitle}</strong>
+                    <span>
+                      {date(o.createdAt, { year: undefined })} ·{" "}
+                      {o.id.slice(0, 6)}
+                    </span>
+                  </div>
+                  <Badge status={o.status} />
+                </div>
+              ))
+          ) : (
+            <div className="activity-empty">
+              <Ticket size={30} />
+              <span>
+                Your bookings will appear here.
+                <br />
+                Every great event starts with the first ticket.
+              </span>
+            </div>
+          )}
+        </section>
+      </div>
+      <div className="dashboard-section-header">
+        <h2>Your events</h2>
+        <Link className="text-link" href="/organizer/events">
+          View all events
+        </Link>
+      </div>
+      {events.length ? (
+        <EventTable items={events.slice(0, 5)} />
+      ) : (
+        <Empty
+          title="Your next big thing starts here"
+          text="Create your first event and give people something to look forward to."
+          action="Create an event"
+          href="/organizer/events/new"
+        />
+      )}
+    </>
+  );
+}
+function EventTable({ items }: { items: EventItem[] }) {
+  return (
+    <div className="panel table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Event</th>
+            <th>Date</th>
+            <th>Tickets sold</th>
+            <th>Status</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {items.map(({ ev, venue, capacity, sold }) => (
+            <tr key={ev.id}>
+              <td>
+                <div className="manage-event-title">
+                  <img src={ev.image} alt="" />
+                  <span>
+                    <strong>{ev.title}</strong>
+                    <small>
+                      {venue.name}, {venue.city}
+                    </small>
+                  </span>
+                </div>
+              </td>
+              <td>
+                {date(ev.startsAt, { year: undefined })}
+                <br />
+                <small>{time(ev.startsAt)} BST</small>
+              </td>
+              <td>
+                <strong>{sold || 0}</strong> / {capacity}
+              </td>
+              <td>
+                <Badge status={ev.status} />
+              </td>
+              <td>
+                <Link className="text-link" href={"/organizer/events/" + ev.id}>
+                  Manage
+                </Link>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+export function OrganizerEvents() {
+  return (
+    <Guard roles={["Organizer", "Admin"]}>
+      <DashboardShell>
+        <OrganizerEventsContent />
+      </DashboardShell>
+    </Guard>
+  );
+}
+function OrganizerEventsContent() {
+  const [events, setEvents] = useState<EventItem[]>([]),
+    [error, setError] = useState(""),
+    [loading, setLoading] = useState(true),
+    [filter, setFilter] = useState("ALL"),
+    [q, setQ] = useState("");
+  useEffect(() => {
+    api<EventItem[]>("/organizer/events")
+      .then(setEvents)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+  return (
+    <>
+      <div className="dashboard-title">
+        <div>
+          <span className="eyebrow">WHERE GOOD IDEAS BECOME GREAT EVENTS</span>
+          <h1>Your events.</h1>
+          <p>A full view of everything you’re bringing to life.</p>
+        </div>
+        <Link className="button" href="/organizer/events/new">
+          <Plus size={17} />
+          Create event
+        </Link>
+      </div>
+      <div className="page-tabs">
+        {["ALL", "PUBLISHED", "DRAFT", "CANCELLED"].map((f) => (
+          <button
+            className={filter === f ? "active" : ""}
+            key={f}
+            onClick={() => setFilter(f)}
+          >
+            {f === "ALL" ? "All events" : f.toLowerCase()}
+          </button>
+        ))}
+      </div>
+      <Field label="Find an event">
+        <input
+          placeholder="Search by name…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </Field>
+      {loading ? (
+        <Loading />
+      ) : error ? (
+        <ErrorState message={error} />
+      ) : events.filter(
+          (x) =>
+            (filter === "ALL" || x.ev.status === filter) &&
+            x.ev.title.toLowerCase().includes(q.toLowerCase()),
+        ).length ? (
+        <EventTable
+          items={events.filter(
+            (x) =>
+              (filter === "ALL" || x.ev.status === filter) &&
+              x.ev.title.toLowerCase().includes(q.toLowerCase()),
+          )}
+        />
+      ) : (
+        <Empty
+          title="A little room for something new"
+          text="Your events will appear here. Let’s bring your next idea to life."
+          action="Create an event"
+          href="/organizer/events/new"
+        />
+      )}
+    </>
+  );
+}
+type EventFormState = {
+  title: string;
+  artist: string;
+  category: string;
+  description: string;
+  venueId: number;
+  startsAt: string;
+  endsAt: string;
+  minPrice: number;
+  image: string;
+  queueEnabled: boolean;
+  featured: boolean;
+  status: string;
+};
+const covers = [
+  "concert",
+  "festival",
+  "comedy",
+  "tech",
+  "theatre",
+  "food",
+  "sports",
+  "jazz",
+];
+const initial: EventFormState = {
+  title: "",
+  artist: "",
+  category: "Music",
+  description: "",
+  venueId: 1,
+  startsAt: "",
+  endsAt: "",
+  minPrice: 1500,
+  image: "/images/concert.jpg",
+  queueEnabled: false,
+  featured: false,
+  status: "DRAFT",
+};
+function localInput(value: string) {
+  return new Date(new Date(utc(value)).getTime() + 6 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 16);
+}
+export function EventEditor({ id }: { id?: number }) {
+  return (
+    <Guard roles={["Organizer", "Admin"]}>
+      <DashboardShell>
+        <EventEditorContent id={id} />
+      </DashboardShell>
+    </Guard>
+  );
+}
+function EventEditorContent({ id }: { id?: number }) {
+  const router = useRouter(),
+    { notify } = useApp(),
+    [form, setForm] = useState<EventFormState>(initial),
+    [venues, setVenues] = useState<Venue[]>([]),
+    [current, setCurrent] = useState<EventItem>(),
+    [loading, setLoading] = useState(!!id),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(""),
+    [tab, setTab] = useState("details"),
+    [attendees, setAttendees] = useState<
+      {
+        id: string;
+        name: string;
+        email: string;
+        seat: string;
+        section: string;
+        status: string;
+      }[]
+    >([]),
+    [price, setPrice] = useState(1500),
+    [section, setSection] = useState("Standard"),
+    [cancel, setCancel] = useState(false),
+    [reason, setReason] = useState("");
+  useEffect(() => {
+    api<Venue[]>("/venues")
+      .then(setVenues)
+      .catch((e) => setError(e.message));
+    if (id)
+      api<EventItem[]>("/organizer/events")
+        .then((items) => {
+          const item = items.find((x) => x.ev.id === id);
+          if (!item) throw new Error("Event not found.");
+          setCurrent(item);
+          const e = item.ev;
+          setForm({
+            ...e,
+            startsAt: localInput(e.startsAt),
+            endsAt: localInput(e.endsAt),
+            minPrice: e.minPrice / 100,
+          });
+        })
+        .catch((e) => setError(e.message))
+        .finally(() => setLoading(false));
+  }, [id]);
+  useEffect(() => {
+    if (id && tab === "attendees")
+      api<typeof attendees>(`/organizer/events/${id}/attendees`)
+        .then(setAttendees)
+        .catch((e) => notify(e.message, true));
+  }, [id, tab, notify]);
+  function set<K extends keyof EventFormState>(
+    key: K,
+    value: EventFormState[K],
+  ) {
+    setForm((old) => ({ ...old, [key]: value }));
+  }
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const data = {
+        ...form,
+        minPrice: Math.round(form.minPrice * 100),
+        startsAt: new Date(form.startsAt + "+06:00").toISOString(),
+        endsAt: new Date(form.endsAt + "+06:00").toISOString(),
+      };
+      await api("/organizer/events" + (id ? "/" + id : ""), {
+        method: id ? "PUT" : "POST",
+        body: json(data),
+      });
+      notify(
+        id
+          ? "Your event is up to date."
+          : form.status === "PUBLISHED"
+            ? "Your event is live. Let the good times begin."
+            : "Your draft is saved.",
+      );
+      router.push("/organizer/events");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function updatePrices(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const r = await api<{ updated: number }>(
+        `/organizer/events/${id}/prices`,
+        {
+          method: "PUT",
+          body: json({ section, price: Math.round(price * 100) }),
+        },
+      );
+      notify(`Updated prices for ${r.updated} available seats.`);
+    } catch (e) {
+      notify((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function cancelEvent(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api(`/organizer/events/${id}/cancel`, {
+        method: "POST",
+        body: json({ reason }),
+      });
+      notify(
+        "Event cancelled. Refund requests have been created for confirmed bookings.",
+      );
+      router.push("/organizer/events");
+    } catch (e) {
+      notify((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+  function csv() {
+    const rows = [
+      ["Name", "Email", "Section", "Seat", "Status"],
+      ...attendees.map((a) => [a.name, a.email, a.section, a.seat, a.status]),
+    ];
+    const encode = (s: string) =>
+      '"' + s.replaceAll('"', '""').replace(/^[=+@-]/, "'$&") + '"';
+    const blob = new Blob(
+      [rows.map((r) => r.map(encode).join(",")).join("\r\n")],
+      { type: "text/csv;charset=utf-8" },
+    );
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `event-${id}-attendees.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  if (loading) return <Loading />;
+  if (error && !venues.length) return <ErrorState message={error} />;
+  return (
+    <>
+      <div className="dashboard-title">
+        <div>
+          <span className="eyebrow">MAKE ROOM FOR A FULL HOUSE</span>
+          <h1>{id ? "Make it even better." : "Bring your idea to life."}</h1>
+          <p>{id ? form.title : "A few details now. Great memories later."}</p>
+        </div>
+        {id && form.status === "PUBLISHED" && (
+          <Link className="button button-outline" href={"/events/" + id}>
+            <Eye size={16} />
+            View event
+          </Link>
+        )}
+      </div>
+      {id && (
+        <div className="page-tabs">
+          {["details", "pricing", "attendees"].map((t) => (
+            <button
+              key={t}
+              className={tab === t ? "active" : ""}
+              onClick={() => setTab(t)}
+            >
+              {t === "details"
+                ? "Event details"
+                : t === "pricing"
+                  ? "Seat pricing"
+                  : "Attendees"}
+            </button>
+          ))}
+        </div>
+      )}
+      {tab === "details" ? (
+        <form className="event-form" onSubmit={save}>
+          <section className="panel">
+            <h2>The essentials</h2>
+            <div className="form-grid">
+              <Field label="Event name">
+                <input
+                  required
+                  minLength={3}
+                  maxLength={150}
+                  placeholder="Give your next great night a name"
+                  value={form.title}
+                  onChange={(e) => set("title", e.target.value)}
+                />
+              </Field>
+              <Field label="Artist / host">
+                <input
+                  required
+                  minLength={2}
+                  maxLength={200}
+                  placeholder="Who’s making it happen?"
+                  value={form.artist}
+                  onChange={(e) => set("artist", e.target.value)}
+                />
+              </Field>
+              <Field label="Category">
+                <select
+                  value={form.category}
+                  onChange={(e) => set("category", e.target.value)}
+                >
+                  {[
+                    "Music",
+                    "Comedy",
+                    "Technology",
+                    "Arts & Theatre",
+                    "Food & Culture",
+                    "Sports",
+                  ].map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Venue">
+                <select
+                  value={form.venueId}
+                  onChange={(e) => set("venueId", Number(e.target.value))}
+                >
+                  {venues.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name} · {v.city}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <div className="form-wide">
+                <Field
+                  label="Tell the story"
+                  hint="Help your guests picture themselves there."
+                >
+                  <textarea
+                    required
+                    minLength={20}
+                    maxLength={6000}
+                    value={form.description}
+                    onChange={(e) => set("description", e.target.value)}
+                    placeholder="What makes this experience worth being there for?"
+                  />
+                </Field>
+              </div>
+            </div>
+            <span className="field">Choose your cover</span>
+            <div className="cover-options">
+              {covers.map((c) => (
+                <button
+                  type="button"
+                  key={c}
+                  className={
+                    form.image === `/images/${c}.jpg` ? "selected" : ""
+                  }
+                  aria-label={`Select ${c} cover`}
+                  aria-pressed={form.image === `/images/${c}.jpg`}
+                  onClick={() => set("image", `/images/${c}.jpg`)}
+                >
+                  <img src={`/images/${c}.jpg`} alt={c} />
+                </button>
+              ))}
+            </div>
+          </section>
+          <section className="panel">
+            <h2>The when and the how much</h2>
+            <div className="form-grid">
+              <Field label="Starts at (Bangladesh time, UTC+6)">
+                <input
+                  type="datetime-local"
+                  required
+                  value={form.startsAt}
+                  onChange={(e) => set("startsAt", e.target.value)}
+                />
+              </Field>
+              <Field label="Ends at (Bangladesh time, UTC+6)">
+                <input
+                  type="datetime-local"
+                  required
+                  value={form.endsAt}
+                  onChange={(e) => set("endsAt", e.target.value)}
+                />
+              </Field>
+              <Field
+                label="Standard ticket price (৳)"
+                hint="Premium = 1.5×, VIP = 2×. Customize available seats in Pricing."
+              >
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  max={500000}
+                  step="0.01"
+                  value={form.minPrice}
+                  onChange={(e) => set("minPrice", Number(e.target.value))}
+                />
+              </Field>
+              <Field label="Publication">
+                <select
+                  value={form.status === "CANCELLED" ? "DRAFT" : form.status}
+                  onChange={(e) => set("status", e.target.value)}
+                >
+                  <option value="DRAFT">Save as draft</option>
+                  <option value="PUBLISHED">
+                    Published · open for bookings
+                  </option>
+                </select>
+              </Field>
+            </div>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={form.queueEnabled}
+                onChange={(e) => set("queueEnabled", e.target.checked)}
+              />
+              <span>
+                Enable the waiting room for high-demand ticket releases.
+              </span>
+            </label>
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={form.featured}
+                onChange={(e) => set("featured", e.target.checked)}
+              />
+              <span>Feature this event in the spotlight.</span>
+            </label>
+            <p className="inline-info">
+              <ShieldCheck size={15} />
+              Prices are stored in minor units. A transparent 5% service fee is
+              added at checkout.
+            </p>
+          </section>
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="form-actions">
+            {id && current?.ev.status !== "CANCELLED" && (
+              <button
+                type="button"
+                className="text-link text-danger"
+                onClick={() => setCancel(true)}
+              >
+                Cancel event
+              </button>
+            )}
+            <Link className="button button-outline" href="/organizer/events">
+              Back to events
+            </Link>
+            <button
+              className="button"
+              disabled={busy || current?.ev.status === "CANCELLED"}
+            >
+              {busy ? (
+                <Loader2 className="spin" size={17} />
+              ) : (
+                <Check size={17} />
+              )}{" "}
+              {id
+                ? "Save changes"
+                : form.status === "PUBLISHED"
+                  ? "Publish event"
+                  : "Save draft"}
+            </button>
+          </div>
+        </form>
+      ) : tab === "pricing" ? (
+        <section className="panel account-panel">
+          <h2>A price for every experience</h2>
+          <p>
+            Update the price of available seats. Existing reservations and sold
+            tickets keep their original prices.
+          </p>
+          <form onSubmit={updatePrices}>
+            <Field label="Seat section">
+              <select
+                value={section}
+                onChange={(e) => setSection(e.target.value)}
+              >
+                {["Standard", "Premium", "VIP"].map((s) => (
+                  <option key={s}>{s}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="New price (৳)">
+              <input
+                type="number"
+                required
+                min={1}
+                max={1000000}
+                step="0.01"
+                value={price}
+                onChange={(e) => setPrice(Number(e.target.value))}
+              />
+            </Field>
+            <button className="button" disabled={busy}>
+              {busy ? "Updating…" : "Update available seats"}
+            </button>
+          </form>
+        </section>
+      ) : (
+        <>
+          <div className="dashboard-section-header">
+            <h2>{attendees.length} guests on the list</h2>
+            <button
+              className="button button-outline button-small"
+              onClick={csv}
+              disabled={!attendees.length}
+            >
+              <Download size={15} />
+              Export CSV
+            </button>
+          </div>
+          {attendees.length ? (
+            <div className="panel table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Guest</th>
+                    <th>Email</th>
+                    <th>Seat</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendees.map((a) => (
+                    <tr key={a.id}>
+                      <td>
+                        <strong>{a.name}</strong>
+                      </td>
+                      <td>{a.email}</td>
+                      <td>
+                        {a.section} · {a.seat}
+                      </td>
+                      <td>
+                        <Badge status={a.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <Empty
+              title="Your guest list is waiting"
+              text="When the first tickets are booked, you’ll find your guests here."
+            />
+          )}
+        </>
+      )}
+      {cancel && (
+        <Modal title="Cancel this event?" onClose={() => setCancel(false)}>
+          <p>
+            This closes new bookings and creates refund requests for confirmed
+            orders. Administrators must approve the refunds. This cannot be
+            undone.
+          </p>
+          <form onSubmit={cancelEvent}>
+            <Field label="Reason for cancellation">
+              <textarea
+                required
+                minLength={5}
+                maxLength={500}
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              />
+            </Field>
+            <button className="button button-full" disabled={busy}>
+              {busy ? "Cancelling…" : "Confirm event cancellation"}
+            </button>
+          </form>
+        </Modal>
+      )}
+    </>
+  );
+}
+export function VenuesPage() {
+  return (
+    <Guard roles={["Organizer", "Admin"]}>
+      <DashboardShell>
+        <VenuesContent />
+      </DashboardShell>
+    </Guard>
+  );
+}
+function VenuesContent() {
+  const { notify } = useApp(),
+    [venues, setVenues] = useState<Venue[]>([]),
+    [open, setOpen] = useState(false),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(""),
+    [form, setForm] = useState({
+      name: "",
+      city: "Dhaka",
+      address: "",
+      timeZone: "Asia/Dhaka",
+      rows: 10,
+      seatsPerRow: 12,
+    });
+  const load = useCallback(() => api<Venue[]>("/venues").then(setVenues), []);
+  useEffect(() => {
+    void load().catch((e) => setError(e.message));
+  }, [load]);
+  async function create(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api("/organizer/venues", { method: "POST", body: json(form) });
+      await load();
+      setOpen(false);
+      notify("Your venue is ready for its next event.");
+    } catch (e) {
+      notify((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <div className="dashboard-title">
+        <div>
+          <span className="eyebrow">GREAT MOMENTS NEED THE RIGHT PLACE</span>
+          <h1>Your venues.</h1>
+          <p>Every seat, thoughtfully mapped.</p>
+        </div>
+        <button className="button" onClick={() => setOpen(true)}>
+          <Plus size={16} />
+          Add venue
+        </button>
+      </div>
+      {error ? (
+        <ErrorState message={error} />
+      ) : (
+        <div className="venue-cards">
+          {venues.map((v) => (
+            <article className="panel venue-card" key={v.id}>
+              <MapPin size={30} />
+              <h3>{v.name}</h3>
+              <p>{v.address}</p>
+              <p>
+                {v.city} · {v.timeZone}
+              </p>
+              <div className="ticket-perforation" />
+              <small>
+                {v.rows} rows × {v.seatsPerRow} seats · {v.rows * v.seatsPerRow}{" "}
+                capacity
+              </small>
+            </article>
+          ))}
+        </div>
+      )}
+      {open && (
+        <Modal
+          title="A new place for good times"
+          onClose={() => setOpen(false)}
+        >
+          <form onSubmit={create}>
+            <Field label="Venue name">
+              <input
+                required
+                minLength={3}
+                maxLength={120}
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+            </Field>
+            <Field label="City">
+              <input
+                required
+                minLength={2}
+                maxLength={80}
+                value={form.city}
+                onChange={(e) => setForm({ ...form, city: e.target.value })}
+              />
+            </Field>
+            <Field label="Full address">
+              <input
+                required
+                minLength={5}
+                maxLength={300}
+                value={form.address}
+                onChange={(e) => setForm({ ...form, address: e.target.value })}
+              />
+            </Field>
+            <Field label="Time zone">
+              <input
+                required
+                value={form.timeZone}
+                onChange={(e) => setForm({ ...form, timeZone: e.target.value })}
+              />
+            </Field>
+            <div className="form-grid">
+              <Field label="Rows (1–26)">
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  max={26}
+                  value={form.rows}
+                  onChange={(e) =>
+                    setForm({ ...form, rows: Number(e.target.value) })
+                  }
+                />
+              </Field>
+              <Field label="Seats per row (1–40)">
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  max={40}
+                  value={form.seatsPerRow}
+                  onChange={(e) =>
+                    setForm({ ...form, seatsPerRow: Number(e.target.value) })
+                  }
+                />
+              </Field>
+            </div>
+            <button className="button button-full" disabled={busy}>
+              {busy ? "Creating…" : "Create venue"}
+            </button>
+          </form>
+        </Modal>
+      )}
+    </>
+  );
+}

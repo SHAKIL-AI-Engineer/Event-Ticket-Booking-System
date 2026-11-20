@@ -4,6 +4,7 @@ const config: NextConfig = {
   output: "standalone",
   async rewrites() {
     return [
+      { source: "/openapi/:path*", destination: `${backend}/openapi/:path*` },
       { source: "/api/:path*", destination: `${backend}/api/:path*` },
       { source: "/hubs/:path*", destination: `${backend}/hubs/:path*` },
     ];

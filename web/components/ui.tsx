@@ -1,6 +1,7 @@
 "use client";
 import { ReactNode, useEffect, useRef } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   Loader2,
   X,
@@ -163,6 +164,7 @@ export function Guard({
   roles?: string[];
 }) {
   const { user, loading } = useApp();
+  const pathname = usePathname();
   if (loading) return <Loading />;
   if (!user)
     return (
@@ -170,7 +172,7 @@ export function Guard({
         title="Your experiences, all in one place"
         text="Sign in to manage your tickets and pick up where you left off."
         action="Sign in"
-        href="/login"
+        href={"/login?next=" + encodeURIComponent(pathname)}
       />
     );
   if (roles && !roles.includes(user.role))

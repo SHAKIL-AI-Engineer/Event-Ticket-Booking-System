@@ -180,8 +180,8 @@ def main():
             fans[4].call('GET','/orders/'+order['id'],expect=404)
             fans[4].call('GET','/tickets/'+ticket['ticket']['id']+'/qr',raw=True,expect=404)
             check(True,'order and QR private ownership checks')
-            event_reference='sandbox_'+order['id']
-            raw=json.dumps({'id':'evt_duplicate','data':{'object':{'id':order['id']}}},separators=(',',':'))
+            with open_db(dbpath) as db: event_reference=db.execute('SELECT Reference FROM Payments WHERE OrderId=?',(order['id'],)).fetchone()[0]
+            raw=json.dumps({'id':'evt_duplicate','data':{'object':{'id':event_reference}}},separators=(',',':'))
             stamp=str(int(time.time()));signature=hmac.new(b'whsec_integration_only',(stamp+'.'+raw).encode(),hashlib.sha256).hexdigest()
             headers={'Content-Type':'application/json','Stripe-Signature':f't={stamp},v1={signature}'}
             statuses=[requests.post(base+'/api/v1/webhooks/payments',data=raw,headers=headers).status_code for _ in range(5)]
@@ -208,8 +208,15 @@ def main():
             result=fans[5].post('/payments/'+o['id']+'/authorize',{'outcome':'delayed'},expect=200)
             check(result['order']['status']=='PROCESSING','ambiguous capture remains processing')
             with open_db(dbpath) as db: db.execute('UPDATE Holds SET ExpiresAt=? WHERE Id=?',(past,delayed['id']))
-            time.sleep(2.2)
-            with open_db(dbpath) as db: check(db.execute('SELECT Status FROM Seats WHERE EventId=1 AND Id=41').fetchone()[0]=='ALLOCATED','unknown capture retains allocated inventory beyond hold TTL')
+            # Restart the API at the ambiguous capture boundary to test durable recovery.
+            process.terminate();process.wait(timeout=8)
+            process=subprocess.Popen([DOTNET,'run','--project',str(ROOT/'backend/EventHub.Api'),'--no-build','--no-launch-profile'],env=env,cwd=ROOT,stdout=log,stderr=log)
+            for _ in range(80):
+                try:
+                    if requests.get(base+'/health',timeout=1).status_code==200:break
+                except requests.RequestException:pass
+                time.sleep(.1)
+            with open_db(dbpath) as db: check(db.execute('SELECT Status FROM Seats WHERE EventId=1 AND Id=41').fetchone()[0] in ('ALLOCATED','SOLD'),'unknown capture retains allocated inventory beyond hold TTL')
             for _ in range(24):
                 latest=fans[5].get('/orders/'+o['id'])
                 if latest['order']['status']=='CONFIRMED':break
@@ -246,7 +253,28 @@ def main():
             customer.call('PUT','/favorites/2',expect=200);check(2 in customer.get('/favorites'),'saved events persist per account')
             check(len(customer.get('/notifications'))>=2,'booking and refund notifications persist')
             check(len(admin.get('/admin/overview')['audit'])>0,'administrative audit history records actual actions')
-            print(f'\n{checks} integration checks passed against isolated {'SQL Server' if sql_context else 'SQLite'}.\n',flush=True)
+            # Management and security boundary regression checks.
+            organizer.call('PUT','/organizer/events/2/prices',{'section':'VIP','price':100000000},expect=200)
+            _,large=hold(fans[10],list(range(1,9)),event=2)
+            check(large['subtotal']==800000000 and large['fee']==40000000 and large['total']==840000000,'large valid quotes cannot overflow integer fee calculation')
+            fans[10].call('DELETE','/holds/'+large['id'],expect=200)
+            venue_body={'name':'Small studio','city':'Dhaka','address':'10 Test Avenue, Dhaka','timeZone':'Asia/Dhaka','rows':1,'seatsPerRow':2}
+            venue=organizer.post('/organizer/venues',venue_body,key='studio-venue',expect=200)
+            replay=organizer.post('/organizer/venues',venue_body,key='studio-venue',expect=200)
+            check(venue['id']>0 and replay['id']==venue['id'],'venue creation persists its generated ID before idempotent replay')
+            studio=organizer.post('/organizer/events',{'title':'Studio evening','artist':'Test host','category':'Arts & Theatre','description':'An intimate studio experience for the fixture guests.','venueId':venue['id'],'startsAt':start,'endsAt':end,'minPrice':100000,'image':'/images/theatre.jpg','queueEnabled':False,'featured':False,'status':'PUBLISHED'},expect=201)
+            studio_seats=anonymous.get('/events/'+str(studio['id'])+'/seats')['seats']
+            check(min(s['price'] for s in studio_seats)==studio['minPrice'],'even a single-row venue has seats at its advertised starting price')
+            _,small_hold=hold(fans[11],[1],event=studio['id'])
+            small_order=fans[11].post('/orders',{'holdId':small_hold['id']},expect=201)
+            fans[11].post('/payments/'+small_order['id']+'/authorize',{'outcome':'success'},expect=200)
+            organizer.post('/organizer/events/'+str(studio['id'])+'/cancel',{'reason':'Venue is no longer available'},expect=200)
+            cancelled=fans[11].get('/orders/'+small_order['id'])
+            check(cancelled['order']['status']=='REFUND_REQUESTED' and cancelled['refund']['status']=='REQUESTED','event cancellation freezes confirmed tickets and creates an auditable refund request')
+            customer.call('PUT','/account',{'name':'Cross site attempt'},headers={'Sec-Fetch-Site':'cross-site'},expect=403)
+            check(True,'cross-site browser mutations are rejected before changing profile data')
+            database_name = 'SQL Server' if sql_context else 'SQLite'
+            print(f'\n{checks} integration checks passed against isolated {database_name}.\n',flush=True)
         except Exception:
             log.flush();log.seek(0);print('\nAPI log tail:\n'+log.read()[-12000:],flush=True)
             raise

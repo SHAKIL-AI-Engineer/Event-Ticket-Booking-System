@@ -58,6 +58,8 @@ export function AuthPage({ register = false }: { register?: boolean }) {
       const requested = new URLSearchParams(location.search).get("next");
       if (
         requested?.startsWith("/") &&
+        !requested.includes("\\") &&
+        new URL(requested, location.origin).origin === location.origin &&
         !requested.startsWith("//") &&
         !requested.startsWith("/login") &&
         !requested.startsWith("/register")
