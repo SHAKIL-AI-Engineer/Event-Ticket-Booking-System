@@ -1,0 +1,63 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["cle1"],
+  "services": {
+    "web": {
+      "root": "web",
+      "framework": "nextjs"
+    },
+    "api": {
+      "root": "backend/EventHub.Api",
+      "runtime": "container",
+      "entrypoint": "Dockerfile.vercel"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/v1/(.*)",
+      "destination": {
+        "service": "api"
+      }
+    },
+    {
+      "source": "/hubs/(.*)",
+      "destination": {
+        "service": "api"
+      }
+    },
+    {
+      "source": "/health",
+      "destination": {
+        "service": "api"
+      }
+    },
+    {
+      "source": "/openapi/(.*)",
+      "destination": {
+        "service": "api"
+      }
+    },
+    {
+      "source": "/(.*)",
+      "destination": {
+        "service": "web"
+      }
+    }
+  ],
+  "daemons": {
+    "recovery": {
+      "root": "backend/EventHub.Api",
+      "entrypoint": "Dockerfile.vercel",
+      "command": [
+        "dotnet",
+        "EventHub.Api.dll",
+        "--Workers:Enabled=true",
+        "--urls",
+        "http://0.0.0.0:8080"
+      ],
+      "instances": {
+        "cle1": 1
+      }
+    }
+  }
+}

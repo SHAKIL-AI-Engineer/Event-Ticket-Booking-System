@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/backend/">
+    <Project Path="backend/EventHub.Api/EventHub.Api.csproj" />
+    <Project Path="backend/EventHub.DbTool/EventHub.DbTool.csproj" />
+    <Project Path="backend/EventHub.Tests/EventHub.Tests.csproj" />
+  </Folder>
+</Solution>

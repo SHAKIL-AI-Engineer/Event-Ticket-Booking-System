@@ -1,0 +1,13 @@
+node_modules/
+.next/
+**/bin/
+**/obj/
+**/data/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+*.log
+artifacts/
+
+.vercel/

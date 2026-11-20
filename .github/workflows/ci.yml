@@ -1,0 +1,42 @@
+name: Verify EventHub
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build-and-integrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "10.0.x" }
+      - run: npm --prefix web ci
+      - run: npm --prefix web run build
+      - run: dotnet build EventHub.slnx --configuration Debug
+      - run: python scripts/test_api.py
+      - run: dotnet run --project backend/EventHub.Tests --no-build
+      - run: node web/scripts/test-date.mjs
+  sqlserver-integrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "10.0.x" }
+      - run: dotnet build EventHub.slnx --configuration Debug
+      - run: docker pull mcr.microsoft.com/mssql/server:2022-latest
+      - run: python scripts/test_api.py --sqlserver
+  postgres-integrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with: { dotnet-version: "10.0.x" }
+      - run: dotnet build EventHub.slnx --configuration Debug
+      - run: docker pull postgres:17-alpine
+      - run: python scripts/test_api.py --postgres
