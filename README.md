@@ -2,7 +2,7 @@
 
 A complete runnable web application based on the supplied enterprise ticketing blueprint: event discovery, assigned-seat booking, checkout, QR tickets, organizer management, and administrative operations.
 
-**Next.js 16 · React 19 · TypeScript · ASP.NET Core .NET 10 · EF Core · SQL Server / SQLite · SignalR**
+**Next.js 16 · React 19 · TypeScript · ASP.NET Core .NET 10 · EF Core · SQL Server / PostgreSQL / SQLite · SignalR**
 
 ## Run locally
 
@@ -48,7 +48,7 @@ npm --prefix web run build
 python scripts/test_api.py
 ```
 
-The integration runner starts an isolated API/database, performs real HTTP requests, and checks database state. It covers 46 checks including a 16-user contested-seat race, overlapping groups, idempotency, signed webhook replay, server expiry, recovery after an API restart during ambiguous capture, refunds, transfers, and concurrent check-in. It cleans up its fixture.
+The integration runner starts an isolated API/database, performs real HTTP requests, and checks database state. It covers 47 checks including a 16-user contested-seat race, overlapping groups, idempotency, signed webhook replay, server expiry, recovery after an API restart during ambiguous capture, refunds, transfers, and concurrent check-in. It cleans up its fixture.
 
 For the SQL Server provider, with Docker and sufficient disk space:
 
@@ -102,3 +102,7 @@ For email, set `Smtp__Host`, `Smtp__Port`, `Smtp__From`, `Smtp__User`, `Smtp__Pa
 - [Kubernetes deployment template](infrastructure/kubernetes/app.yaml).
 
 The blueprint's 100,000 concurrent visitors and 99.95% availability are targets, **not benchmark results**. This repository implements the core web product and transactional workflows. Live provider certification, SQL Server failure/load tests, browser accessibility testing, production identity integration, infrastructure hardening, and disaster-recovery drills remain release work. React Native, OpenSearch, SMS/push, and offline check-in are not included.
+
+## Vercel
+
+[Vercel deployment and Neon setup](docs/vercel.md) describes the Services configuration, encrypted credentials, database migrations, worker, and verification. Payment processing remains in sandbox mode until live provider setup is completed.

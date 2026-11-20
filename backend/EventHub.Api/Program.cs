@@ -13,13 +13,21 @@ using QRCoder;
 using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
-Directory.CreateDirectory("data");
-var sql = builder.Configuration["DatabaseProvider"] == "SqlServer";
-builder.Services.AddDbContextFactory<AppDb>(o =>
+var provider = builder.Configuration["DatabaseProvider"] ?? "Sqlite";
+var sql = provider == "SqlServer";
+var postgres = provider == "Postgres";
+if (builder.Configuration["VERCEL"] == "1" && provider == "Sqlite")
+    throw new InvalidOperationException("Vercel requires an external database; configure DatabaseProvider and DATABASE_URL.");
+if (!sql && !postgres) Directory.CreateDirectory("data");
+var port = builder.Configuration["PORT"];
+if (!string.IsNullOrEmpty(port)) builder.WebHost.UseUrls("http://0.0.0.0:" + port);
+builder.Services.AddDbContextFactory<AppDb, PlatformDbFactory>(o =>
 {
     var connection = builder.Configuration.GetConnectionString("Database")!;
     if (sql)
         o.UseSqlServer(connection);
+    else if (postgres)
+        o.UseNpgsql(DatabaseConfiguration.PostgresConnection(builder.Configuration), n => n.MigrationsHistoryTable("__EFMigrationsHistory", "eventhub"));
     else
         o.UseSqlite(connection);
 });
@@ -32,7 +40,7 @@ builder.Services.AddHttpClient<StripeProvider>(c => c.Timeout = TimeSpan.FromSec
 builder.Services.AddScoped<IPaymentProvider>(sp => builder.Configuration["Payments:Provider"] == "Stripe" ? sp.GetRequiredService<StripeProvider>() : new SandboxProvider());
 var signalr = builder.Services.AddSignalR(o => o.MaximumReceiveMessageSize = 4096);
 if (!string.IsNullOrEmpty(builder.Configuration["Redis:Connection"])) signalr.AddStackExchangeRedis(builder.Configuration["Redis:Connection"]!, options => options.Configuration.AbortOnConnectFail = false);
-builder.Services.AddHostedService<PlatformWorker>();
+if (builder.Configuration.GetValue("Workers:Enabled", true)) builder.Services.AddHostedService<PlatformWorker>();
 builder.Services.AddOpenApi();
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<CatalogCache>();
@@ -48,13 +56,15 @@ _ = app.Services.GetRequiredService<TicketSigner>();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDb>();
-    if (sql)
+    if (sql || postgres)
         await db.Database.MigrateAsync();
     else
         await db.Database.EnsureCreatedAsync();
-    if (!sql)
+    if (!sql && !postgres)
         await db.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
-    await Seed.Run(db, builder.Configuration, app.Environment);
+    // Keep initial users, venues, events, and inventory atomic across a cold start.
+    var store = scope.ServiceProvider.GetRequiredService<Store>();
+    await store.Write(async seedDb => { await Seed.Run(seedDb, builder.Configuration, app.Environment); return true; });
 }
 app.Use(async (ctx, next) =>
 {
@@ -104,7 +114,7 @@ app.MapGet("/health", async (AppDb db) =>
     return Results.Json(new
     {
         status = healthy ? "healthy" : "unhealthy",
-        database = sql ? "SqlServer" : "Sqlite",
+        database = provider,
         time = DateTime.UtcNow
     }, statusCode: healthy ? 200 : 503);
 });
@@ -136,7 +146,7 @@ api.AddEndpointFilter(async (context, next) =>
     }
     return await next(context);
 });
-api.MapGet("/config", () => new { paymentProvider = builder.Configuration["Payments:Provider"], stripePublishableKey = builder.Configuration["Payments:StripePublishableKey"], demoAvailable = app.Environment.IsDevelopment(), currency = "BDT", holdSeconds = builder.Configuration.GetValue("Booking:HoldSeconds", 300) });
+api.MapGet("/config", () => new { paymentProvider = builder.Configuration["Payments:Provider"], stripePublishableKey = builder.Configuration["Payments:StripePublishableKey"], demoAvailable = app.Environment.IsDevelopment(), realtimeMode = !builder.Configuration.GetValue("Workers:Enabled", true) && string.IsNullOrEmpty(builder.Configuration["Redis:Connection"]) ? "snapshot" : "signalr", currency = "BDT", holdSeconds = builder.Configuration.GetValue("Booking:HoldSeconds", 300) });
 api.MapGet("/auth/me", async (HttpContext ctx, AppDb db) =>
 {
     var id = ctx.User.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -271,7 +281,7 @@ api.MapGet("/events/{id:int}/seats", async (int id, AppDb db) =>
     return new
     {
         serverTime = DateTime.UtcNow,
-        seats = seats.Select(x => BookingService.SeatDto(x) with { Status = x.Status == "HELD" && x.ExpiresAt <= DateTime.UtcNow ? "AVAILABLE" : x.Status })
+        seats = seats.Select(x => BookingService.AvailabilityDto(x))
     };
 });
 api.MapGet("/venues", async (AppDb db) => await db.Venues.AsNoTracking().OrderBy(x => x.Name).ToListAsync());
@@ -367,7 +377,7 @@ api.MapPost("/tickets/{id}/transfer", async (string id, TransferRequest req, Htt
         var recipient = await db.Users.SingleOrDefaultAsync(x => x.Email == email) ?? throw new ApiError(404, "RECIPIENT_NOT_FOUND", "Ask the recipient to create an EventHub account first.");
         if (recipient.Id == user)
             throw new ApiError(400, "INVALID_RECIPIENT", "Choose a different account.");
-        var recipientHolds = await db.Holds.Where(x => x.UserId == recipient.Id && x.EventId == t.EventId && x.Status == "ACTIVE" && x.ExpiresAt > DateTime.UtcNow).Select(x => x.Id).ToListAsync();
+        var recipientHolds = await db.Holds.Where(x => x.UserId == recipient.Id && x.EventId == t.EventId && (x.Status == "ALLOCATED" || x.Status == "ACTIVE" && x.ExpiresAt > DateTime.UtcNow)).Select(x => x.Id).ToListAsync();
         var reserved = await db.HoldSeats.CountAsync(x => recipientHolds.Contains(x.HoldId));
         if (reserved + await db.Tickets.CountAsync(x => x.UserId == recipient.Id && x.EventId == t.EventId && x.IsActive) >= 8)
             throw new ApiError(409, "BOOKING_LIMIT", "The recipient already has the maximum number of tickets.");

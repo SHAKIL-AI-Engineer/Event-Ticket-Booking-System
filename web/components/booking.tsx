@@ -242,7 +242,7 @@ export function SeatSelection({ id }: { id: number }) {
 }
 function SeatSelectionContent({ id }: { id: number }) {
   const router = useRouter(),
-    { notify } = useApp(),
+    { notify, config } = useApp(),
     [data, setData] = useState<EventItem | null>(null),
     [seats, setSeats] = useState<Seat[]>([]),
     [selected, setSelected] = useState<number[]>([]),
@@ -257,7 +257,13 @@ function SeatSelectionContent({ id }: { id: number }) {
     requestPayload = useRef("");
   const snapshot = useCallback(async () => {
     const r = await api<{ seats: Seat[] }>(`/events/${id}/seats`);
-    setSeats(r.seats);
+    setSeats((old) => {
+      const current = new Map(old.map((s) => [s.id, s]));
+      return r.seats.map((s) => {
+        const newer = current.get(s.id);
+        return newer && newer.version > s.version ? newer : s;
+      });
+    });
   }, [id]);
   useEffect(() => {
     Promise.all([
@@ -266,6 +272,11 @@ function SeatSelectionContent({ id }: { id: number }) {
     ]).catch((e) => setError(e.message));
   }, [id, snapshot]);
   useEffect(() => {
+    if (config?.realtimeMode === "snapshot") {
+      setLive("Updates every 15 seconds");
+      return;
+    }
+    if (!config) return;
     let stop = false;
     let conn: import("@microsoft/signalr").HubConnection | undefined;
     import("@microsoft/signalr").then(async (signalr) => {
@@ -308,7 +319,14 @@ function SeatSelectionContent({ id }: { id: number }) {
       stop = true;
       void conn?.stop();
     };
-  }, [id, snapshot]);
+  }, [id, snapshot, config]);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible")
+        void snapshot().catch(() => {});
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [snapshot]);
   function choose(s: Seat) {
     if (s.status !== "AVAILABLE") return;
     setSelected((old) =>
@@ -361,7 +379,11 @@ function SeatSelectionContent({ id }: { id: number }) {
       notify(err.message, true);
       if (err.code === "ADMISSION_REQUIRED")
         router.push(`/events/${id}/waiting-room`);
-      await snapshot();
+      try {
+        await snapshot();
+      } catch {
+        /* Preserve the original booking error. */
+      }
     } finally {
       setBusy(false);
     }

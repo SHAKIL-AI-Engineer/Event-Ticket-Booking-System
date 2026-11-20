@@ -21,3 +21,11 @@ The runner also contains an API restart during an unresolved sandbox capture to 
 ## Release acceptance still required
 
 Run SQL Server concurrency and rollback tests, provider failure/timeout/replay tests, browser/mobile/accessibility tests, and backup/restore drills in the actual deployment. Obtain measured latency/capacity results before describing the system as ready for 100,000 concurrent visitors or a 99.95% availability target. Complete identity hardening and financial exception procedures before live sales.
+
+## Vercel/Neon release review
+
+The subsequent release review added PostgreSQL migrations and a dedicated Vercel container/daemon configuration. Both SQLite and native PostgreSQL 17 passed all 47 HTTP/database integration checks. Three targeted payment-race regression cases passed, along with UTC/offset date-formatting checks. The .NET solution builds without warnings, and the Next.js production build succeeds.
+
+The review fixed SQL Server's explicit identity-key seeding, atomic catalog initialization, allocated-seat purchase-limit accounting, stale payment outcomes overwriting captured/refunded state, nonfinal capture responses releasing allocations, offset timestamp parsing, failed Stripe submissions leaving controls busy, stale availability snapshots, and the container's writable-directory assumption. The deployed client uses labeled snapshots when no Redis backplane is configured.
+
+Neon connectivity from the authoring workspace is blocked at the TCP layer. Live database connectivity and the deployed request flow must be checked from the Vercel deployment before calling that release operational. The Vercel GitHub integration cannot access this repository, so the release uses a direct source upload; GitHub Actions do not automatically redeploy this project until that integration is connected.

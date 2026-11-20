@@ -84,6 +84,8 @@ public class StripeProvider(HttpClient http, IConfiguration config) : IPaymentPr
 public record PayRequest(string Outcome = "success");
 public class PaymentService(Store store, IDbContextFactory<AppDb> factory, IPaymentProvider provider, ILogger<PaymentService> logger)
 {
+    static bool Terminal(PaymentAttempt a) => a.Status is "CAPTURED" or "FAILED" or "VOIDED" or "REFUNDED" or "CAPTURED_UNALLOCATED";
+
     public async Task<object> Start(string user, string orderId, string key, PayRequest req)
     {
         if (req.Outcome is not ("success" or "decline" or "delayed"))
@@ -152,7 +154,7 @@ public class PaymentService(Store store, IDbContextFactory<AppDb> factory, IPaym
     {
         await using var read = await factory.CreateDbContextAsync();
         var a = await read.Payments.AsNoTracking().SingleOrDefaultAsync(x => x.OrderId == orderId);
-        if (a == null || a.Status is "CAPTURED" or "FAILED" or "VOIDED" or "REFUNDED")
+        if (a == null || Terminal(a))
             return;
         var o = await read.Orders.AsNoTracking().SingleAsync(x => x.Id == orderId);
         PaymentResult result;
@@ -195,7 +197,7 @@ public class PaymentService(Store store, IDbContextFactory<AppDb> factory, IPaym
                 }
                 a.Status = "ALLOCATED";
                 result = await provider.Capture(a);
-                if (result.Status == "UNKNOWN")
+                if (result.Status is "UNKNOWN" or "AUTHORIZED" or "REQUIRES_ACTION")
                 {
                     await SaveStatus(a.Id, result, "UNKNOWN_CAPTURE");
                     return;
@@ -225,7 +227,7 @@ public class PaymentService(Store store, IDbContextFactory<AppDb> factory, IPaym
     Task<bool> SaveStatus(string id, PaymentResult r, string? status = null) => store.Write(async db =>
     {
         var a = await db.Payments.SingleAsync(x => x.Id == id);
-        if (a.Status is "CAPTURED" or "FAILED" or "VOIDED" or "REFUNDED")
+        if (Terminal(a))
             return true;
         a.Reference = r.Reference;
         a.ClientSecret = r.ClientSecret ?? a.ClientSecret;
@@ -238,6 +240,8 @@ public class PaymentService(Store store, IDbContextFactory<AppDb> factory, IPaym
     Task<bool> Allocate(string id) => store.Write(async db =>
     {
         var o = await db.Orders.SingleAsync(x => x.Id == id);
+        var payment = await db.Payments.SingleAsync(x => x.OrderId == id);
+        if (Terminal(payment)) return o.Status == "CONFIRMED";
         var h = await db.Holds.SingleAsync(x => x.Id == o.HoldId);
         if (h.Status == "CONVERTED" || h.Status == "ALLOCATED")
             return true;
@@ -266,7 +270,7 @@ public class PaymentService(Store store, IDbContextFactory<AppDb> factory, IPaym
     Task<bool> Complete(string id) => store.Write(async db =>
     {
         var o = await db.Orders.SingleAsync(x => x.Id == id);
-        if (o.Status == "CONFIRMED")
+        if (o.Status is "CONFIRMED" or "REFUND_REQUESTED" or "REFUNDED")
             return true;
         var h = await db.Holds.SingleAsync(x => x.Id == o.HoldId);
         var a = await db.Payments.SingleAsync(x => x.OrderId == id);
@@ -309,9 +313,8 @@ public class PaymentService(Store store, IDbContextFactory<AppDb> factory, IPaym
     Task<bool> Fail(string id, string status, string error) => store.Write(async db =>
     {
         var o = await db.Orders.SingleAsync(x => x.Id == id);
-        if (o.Status == "CONFIRMED")
-            return true;
         var a = await db.Payments.SingleAsync(x => x.OrderId == id);
+        if (Terminal(a) || o.Status is "CONFIRMED" or "REFUND_REQUESTED" or "REFUNDED") return true;
         a.Status = status;
         a.Error = error;
         a.ClientSecret = null;

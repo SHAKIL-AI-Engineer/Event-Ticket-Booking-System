@@ -9,6 +9,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Prometheus;
+using Npgsql;
 
 namespace EventHub;
 
@@ -64,7 +65,7 @@ public class Store(IDbContextFactory<AppDb> factory)
             catch (Exception e) when (attempt < 5 && Retryable(e)) { await Task.Delay(Random.Shared.Next(20, 65) * (attempt + 1)); }
         }
     }
-    static bool Retryable(Exception e) => e is SqliteException { SqliteErrorCode: 5 or 6 } || e is SqlException sql && sql.Number is 1205 or 3960 or 2601 or 2627 || e.InnerException != null && Retryable(e.InnerException);
+    static bool Retryable(Exception e) => e is SqliteException { SqliteErrorCode: 5 or 6 } || e is SqlException sql && sql.Number is 1205 or 3960 or 2601 or 2627 || e is PostgresException { SqlState: "40001" or "40P01" or "23505" } || e.InnerException != null && Retryable(e.InnerException);
     public Task<JsonElement> Idempotent(string user, string scope, string key, object request, Func<AppDb, Task<object>> action) => Write(async db =>
     {
         var fingerprint = Security.Hash(Json.Encode(request));

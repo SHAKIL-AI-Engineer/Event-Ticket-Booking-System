@@ -11,6 +11,9 @@ public record HoldView(string Id, int EventId, string Status, DateTime ExpiresAt
 public class BookingService(Store store, IDbContextFactory<AppDb> factory, IConfiguration config)
 {
     public static SeatView SeatDto(Seat x) => new(x.Id, x.Row, x.Number, x.Section, x.Price, x.Status, x.Version);
+    public static SeatView AvailabilityDto(Seat x) => x.Status == "HELD" && x.ExpiresAt <= DateTime.UtcNow
+        ? SeatDto(x) with { Status = "AVAILABLE" }
+        : SeatDto(x);
     public static async Task Expire(AppDb db)
     {
         var now = DateTime.UtcNow;
@@ -52,7 +55,7 @@ public class BookingService(Store store, IDbContextFactory<AppDb> factory, IConf
             if (ev.QueueEnabled && !await db.Queue.AnyAsync(x => x.EventId == ev.Id && x.UserId == user && x.Token == req.AdmissionToken && x.Status == "ADMITTED" && x.AdmittedUntil > DateTime.UtcNow))
                 throw new ApiError(403, "ADMISSION_REQUIRED", "Join the waiting room before reserving seats.");
             var owned = await db.Tickets.CountAsync(x => x.UserId == user && x.EventId == ev.Id && x.IsActive);
-            var activeHolds = await db.Holds.Where(x => x.UserId == user && x.EventId == ev.Id && x.Status == "ACTIVE" && x.ExpiresAt > DateTime.UtcNow).Select(x => x.Id).ToListAsync();
+            var activeHolds = await db.Holds.Where(x => x.UserId == user && x.EventId == ev.Id && (x.Status == "ALLOCATED" || x.Status == "ACTIVE" && x.ExpiresAt > DateTime.UtcNow)).Select(x => x.Id).ToListAsync();
             var heldCount = await db.HoldSeats.CountAsync(x => activeHolds.Contains(x.HoldId));
             if (owned + heldCount + req.SeatIds.Length > 8)
                 throw new ApiError(409, "BOOKING_LIMIT", "You can reserve or own at most 8 tickets per event.");

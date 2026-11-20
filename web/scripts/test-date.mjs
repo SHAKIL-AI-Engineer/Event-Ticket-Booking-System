@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import ts from 'typescript';
+const source=await readFile(new URL('../lib/api.ts',import.meta.url),'utf8');
+const compiled=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2020}}).outputText;
+const {date,time,utc}=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
+assert.equal(date('2026-11-20T00:00:00Z'),date('2026-11-20T06:00:00+06:00'));
+assert.equal(time('2026-11-20T00:00:00Z'),time('2026-11-19T19:00:00-05:00'));
+assert.equal(date('2026-11-20T00:00:00'),date('2026-11-20T00:00:00Z'));
+assert.equal(utc('2026-11-20T06:00:00+06:00'),'2026-11-20T06:00:00+06:00');
+console.log('PASS date/time formatting: UTC, offsets, and database timestamps');

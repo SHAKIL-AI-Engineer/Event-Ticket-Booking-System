@@ -46,7 +46,7 @@ export const date = (iso: string, options?: Intl.DateTimeFormatOptions) =>
     year: "numeric",
     timeZone: "Asia/Dhaka",
     ...options,
-  }).format(new Date(iso.endsWith("Z") ? iso : iso + "Z"));
+  }).format(new Date(utc(iso)));
 export const time = (iso: string) =>
   date(iso, {
     day: undefined,

@@ -61,6 +61,68 @@ class SqlFixture:
     @property
     def connection(self):return f'Server=127.0.0.1,{self.port};Database=EventHubIntegration;User Id=sa;Password={self.password};TrustServerCertificate=True'
 
+class PostgresFixture:
+    provider='Postgres'
+    def __init__(self):
+        self.name='eventhub-pg-test-'+uuid.uuid4().hex[:8]
+        self.password=secrets.token_urlsafe(25)
+        with socket.socket() as sock:sock.bind(('127.0.0.1',0));self.port=sock.getsockname()[1]
+        self.env={**os.environ,'POSTGRES_PASSWORD':self.password,'PGPASSWORD':self.password}
+    def __enter__(self):
+        subprocess.run(['docker','run','-d','--name',self.name,'-e','POSTGRES_PASSWORD','-e','POSTGRES_USER=eventhub','-e','POSTGRES_DB=eventhub','-p',f'127.0.0.1:{self.port}:5432','postgres:17-alpine'],env=self.env,check=True,stdout=subprocess.DEVNULL)
+        for _ in range(100):
+            try:self.command('SELECT 1');return self
+            except RuntimeError:time.sleep(.2)
+        self.__exit__(None,None,None);raise RuntimeError('Postgres startup timed out')
+    def command(self,query):
+        result=subprocess.run(['docker','exec','-e','PGPASSWORD',self.name,'psql','-U','eventhub','-d','eventhub','-At','-v','ON_ERROR_STOP=1','-c',query],env=self.env,text=True,capture_output=True)
+        if result.returncode:raise RuntimeError(result.stderr)
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    def __exit__(self,*args):subprocess.run(['docker','rm','-f',self.name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    @property
+    def connection(self):return f'Host=127.0.0.1;Port={self.port};Database=eventhub;Username=eventhub;Password={self.password};SSL Mode=Disable'
+
+class NativePostgresFixture:
+    provider='Postgres'
+    def __init__(self):
+        self.bin=pathlib.Path(os.environ.get('EVENTHUB_POSTGRES_BIN','/workspace/scratch/pg-runtime/usr/lib/postgresql/17/bin'))
+        self.tmp=tempfile.TemporaryDirectory(prefix='eventhub-native-pg-')
+        self.dir=pathlib.Path(self.tmp.name)
+        with socket.socket() as sock:sock.bind(('127.0.0.1',0));self.port=sock.getsockname()[1]
+    def __enter__(self):
+        subprocess.run([str(self.bin/'initdb'),'-D',str(self.dir/'data'),'--auth=trust','-U','eventhub','-L',str(self.bin.parents[3]/'share/postgresql/17')],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        subprocess.run([str(self.bin/'pg_ctl'),'-D',str(self.dir/'data'),'-l',str(self.dir/'server.log'),'-o',f'-p {self.port} -h 127.0.0.1 -k {self.dir} -c jit=off','-w','start'],check=True,stdout=subprocess.DEVNULL)
+        subprocess.run([str(self.bin/'createdb'),'-h','127.0.0.1','-p',str(self.port),'-U','eventhub','eventhub'],check=True)
+        return self
+    def command(self,query):
+        result=subprocess.run([str(self.bin/'psql'),'-h','127.0.0.1','-p',str(self.port),'-U','eventhub','-d','eventhub','-At','-v','ON_ERROR_STOP=1','-c',query],text=True,capture_output=True)
+        if result.returncode:raise RuntimeError(result.stderr)
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    def __exit__(self,*args):
+        subprocess.run([str(self.bin/'pg_ctl'),'-D',str(self.dir/'data'),'-m','fast','-w','stop'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        self.tmp.cleanup()
+    @property
+    def connection(self):return f'Host=127.0.0.1;Port={self.port};Database=eventhub;Username=eventhub;SSL Mode=Disable'
+
+class PostgresRemoteFixture:
+    provider='Postgres'
+    def __init__(self,connection):self.root=connection;self.name='eventhub_test_'+uuid.uuid4().hex[:16]
+    def tool(self,action,query=None):
+        payload={'connection':self.root,'action':action,'database':self.name}
+        if query is not None:payload['query']=query
+        result=subprocess.run([DOTNET,'run','--project',str(ROOT/'backend/EventHub.DbTool'),'--no-build','--no-launch-profile'],input=json.dumps(payload),text=True,capture_output=True)
+        data=json.loads(result.stdout)
+        if not data.get('ok'):raise RuntimeError('Isolated Postgres fixture operation failed: '+str(data.get('code') or data.get('error'))+' '+str(data.get('detail','')))
+        return data.get('rows',[])
+    def __enter__(self):self.tool('create');print('Created an isolated Neon test database.',flush=True);return self
+    def command(self,query):return ['|'.join(row) for row in self.tool('query',query)]
+    def __exit__(self,*args):self.tool('drop');print('Removed the isolated Neon test database.',flush=True)
+    @property
+    def connection(self):
+        from urllib.parse import urlsplit,urlunsplit
+        url=urlsplit(self.root)
+        return urlunsplit((url.scheme,url.netloc,'/'+self.name,url.query,''))
+
 class SqlRows:
     def __init__(self,rows):self.rows=rows
     def fetchone(self):
@@ -75,6 +137,17 @@ class SqlDb:
         for value in parameters:
             literal=str(value) if isinstance(value,int) else "N'"+str(value).replace("'","''")+"'"
             query=query.replace('?',literal,1)
+        if getattr(sql_context,'provider','SqlServer')=='Postgres':
+            import re
+            tables=['Seats','Holds','Tickets','Payments','Inbox','Scans']
+            columns=['Id','EventId','Status','HoldId','OrderId','IsActive','ExpiresAt','TokenVersion','UserId','Reference','TicketId']
+            query=query.replace("N'","'")
+            parts=re.split("('(?:''|[^'])*')",query)
+            for i in range(0,len(parts),2):
+                parts[i]=re.sub(r'\b('+'|'.join(tables+columns)+r')\b',lambda m:'"'+m[1]+'"',parts[i])
+                for table in tables:parts[i]=parts[i].replace('"'+table+'"','"eventhub"."'+table+'"')
+                parts[i]=re.sub(r'"IsActive"\s*=\s*1','"IsActive" = TRUE',parts[i])
+            query=''.join(parts)
         return SqlRows(sql_context.command(query))
 
 def open_db(path):return SqlDb() if sql_context else sqlite3.connect(path)
@@ -112,7 +185,8 @@ def main():
                'Booking__AdmissionCapacity':'1','Booking__AdmissionSeconds':'600',
                'Logging__LogLevel__Default':'Warning'}
         if sql_context:
-            env['DatabaseProvider']='SqlServer';env['ConnectionStrings__Database']=sql_context.connection
+            env['DatabaseProvider']=getattr(sql_context,'provider','SqlServer');env['ConnectionStrings__Database']=sql_context.connection
+            if getattr(sql_context,'provider','')=='Postgres':env['DATABASE_URL']=sql_context.connection
         log = open(pathlib.Path(tmp)/'api.log','w+')
         process = subprocess.Popen([DOTNET, 'run','--project',str(ROOT/'backend/EventHub.Api'),'--no-build','--no-launch-profile'],env=env,cwd=ROOT,stdout=log,stderr=log)
         try:
@@ -204,6 +278,11 @@ def main():
             declined=fans[4].post('/payments/'+o['id']+'/authorize',{'outcome':'decline'},expect=200)
             check(declined['order']['status']=='FAILED' and not declined['tickets'],'declined payment does not issue tickets')
             with open_db(dbpath) as db: check(db.execute('SELECT Status FROM Seats WHERE EventId=1 AND Id=40').fetchone()[0]=='AVAILABLE','definitive payment failure safely releases seats')
+            _,limit_hold=hold(fans[13],list(range(1,9)),event=4)
+            limit_order=fans[13].post('/orders',{'holdId':limit_hold['id']},expect=201)
+            fans[13].post('/payments/'+limit_order['id']+'/authorize',{'outcome':'delayed'},expect=200)
+            limit_status,limit_error=hold(fans[13],[9],event=4)
+            check(limit_status==409 and limit_error['code']=='BOOKING_LIMIT','unresolved allocated seats count toward the eight-ticket limit')
             _,delayed=hold(fans[5],[41]);o=fans[5].post('/orders',{'holdId':delayed['id']},expect=201)
             result=fans[5].post('/payments/'+o['id']+'/authorize',{'outcome':'delayed'},expect=200)
             check(result['order']['status']=='PROCESSING','ambiguous capture remains processing')
@@ -273,7 +352,7 @@ def main():
             check(cancelled['order']['status']=='REFUND_REQUESTED' and cancelled['refund']['status']=='REQUESTED','event cancellation freezes confirmed tickets and creates an auditable refund request')
             customer.call('PUT','/account',{'name':'Cross site attempt'},headers={'Sec-Fetch-Site':'cross-site'},expect=403)
             check(True,'cross-site browser mutations are rejected before changing profile data')
-            database_name = 'SQL Server' if sql_context else 'SQLite'
+            database_name = getattr(sql_context,'provider','SQL Server') if sql_context else 'SQLite'
             print(f'\n{checks} integration checks passed against isolated {database_name}.\n',flush=True)
         except Exception:
             log.flush();log.seek(0);print('\nAPI log tail:\n'+log.read()[-12000:],flush=True)
@@ -285,7 +364,27 @@ def main():
             log.close()
 
 if __name__=='__main__':
-    if '--sqlserver' in sys.argv:
+    if '--postgres-native' in sys.argv:
+        with NativePostgresFixture() as fixture:
+            sql_context=fixture
+            main()
+    elif '--neon' in sys.argv:
+        import termios
+        previous=None
+        if sys.stdin.isatty():
+            previous=termios.tcgetattr(sys.stdin.fileno());hidden=termios.tcgetattr(sys.stdin.fileno());hidden[3]&=~termios.ECHO;termios.tcsetattr(sys.stdin.fileno(),termios.TCSANOW,hidden)
+        print('Ready for database configuration on stdin (input is hidden).',flush=True)
+        try:connection=json.loads(sys.stdin.readline())['connection']
+        finally:
+            if previous:termios.tcsetattr(sys.stdin.fileno(),termios.TCSANOW,previous)
+        with PostgresRemoteFixture(connection) as fixture:
+            sql_context=fixture
+            main()
+    elif '--postgres' in sys.argv:
+        with PostgresFixture() as fixture:
+            sql_context=fixture
+            main()
+    elif '--sqlserver' in sys.argv:
         with SqlFixture() as fixture:
             sql_context=fixture
             main()

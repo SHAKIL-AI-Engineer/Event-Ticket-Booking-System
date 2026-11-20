@@ -114,6 +114,7 @@ export type OrderView = {
   } | null;
 };
 export type Config = {
+  realtimeMode?: "snapshot" | "signalr";
   paymentProvider: string;
   stripePublishableKey?: string;
   demoAvailable: boolean;

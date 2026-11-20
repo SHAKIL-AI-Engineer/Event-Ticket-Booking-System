@@ -299,7 +299,7 @@ public class Refund
     }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
-public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
+public class AppDb(DbContextOptions options) : DbContext(options)
 {
     public DbSet<User> Users => Set<User>(); public DbSet<Session> Sessions => Set<Session>();
     public DbSet<Venue> Venues => Set<Venue>(); public DbSet<Event> Events => Set<Event>();
@@ -312,6 +312,14 @@ public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
     public DbSet<QueueEntry> Queue => Set<QueueEntry>(); public DbSet<Refund> Refunds => Set<Refund>();
     protected override void OnModelCreating(ModelBuilder b)
     {
+        var postgres = Database.ProviderName == "Npgsql.EntityFrameworkCore.PostgreSQL";
+        if (postgres) b.HasDefaultSchema("eventhub");
+        string Sql(string value) => postgres
+            ? System.Text.RegularExpressions.Regex.Replace(value, @"\[([^\]]+)\]", "\"$1\"")
+                .Replace("\"IsActive\" = 1", "\"IsActive\" = TRUE")
+                .Replace("\"IsActive\" = 0", "\"IsActive\" = FALSE")
+            : value;
+
         foreach (var entity in b.Model.GetEntityTypes())
         foreach (var p in entity.GetProperties().Where(p => p.ClrType == typeof(string)))
             p.SetMaxLength(p.Name is "Payload" or "Response" or "Description" or "Detail" or "Body" or "Policies" ? 8000 : 450);
@@ -338,7 +346,7 @@ public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
         b.Entity<Order>().HasOne<Hold>().WithMany().HasForeignKey(x => x.HoldId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<PaymentAttempt>().HasIndex(x => x.OrderId).IsUnique();
         b.Entity<PaymentAttempt>().HasOne<Order>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
-        b.Entity<Ticket>().HasIndex(x => new { x.EventId, x.SeatId }).IsUnique().HasFilter("[IsActive] = 1");
+        b.Entity<Ticket>().HasIndex(x => new { x.EventId, x.SeatId }).IsUnique().HasFilter(Sql("[IsActive] = 1"));
         b.Entity<Ticket>().HasOne<Seat>().WithMany().HasForeignKey(x => new { x.EventId, x.SeatId }).OnDelete(DeleteBehavior.Restrict);
         b.Entity<Ticket>().HasOne<Order>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<Ticket>().HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
@@ -366,15 +374,15 @@ public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
         b.Entity<Favorite>().HasOne<Event>().WithMany().HasForeignKey(x => x.EventId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<QueueEntry>().HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<QueueEntry>().HasOne<Event>().WithMany().HasForeignKey(x => x.EventId).OnDelete(DeleteBehavior.Restrict);
-        b.Entity<Venue>().ToTable(t => t.HasCheckConstraint("CK_Venue_Capacity", "[Rows] BETWEEN 1 AND 26 AND [SeatsPerRow] BETWEEN 1 AND 40"));
+        b.Entity<Venue>().ToTable(t => t.HasCheckConstraint("CK_Venue_Capacity", Sql("[Rows] BETWEEN 1 AND 26 AND [SeatsPerRow] BETWEEN 1 AND 40")));
         b.Entity<Seat>().ToTable(t =>
         {
-            t.HasCheckConstraint("CK_Seat_Price", "[Price] > 0");
-            t.HasCheckConstraint("CK_Seat_State", "([Status] = 'AVAILABLE' AND [HoldId] IS NULL AND [ExpiresAt] IS NULL) OR ([Status] = 'HELD' AND [HoldId] IS NOT NULL AND [ExpiresAt] IS NOT NULL) OR ([Status] IN ('ALLOCATED', 'SOLD') AND [HoldId] IS NOT NULL AND [ExpiresAt] IS NULL)");
+            t.HasCheckConstraint("CK_Seat_Price", Sql("[Price] > 0"));
+            t.HasCheckConstraint("CK_Seat_State", Sql("([Status] = 'AVAILABLE' AND [HoldId] IS NULL AND [ExpiresAt] IS NULL) OR ([Status] = 'HELD' AND [HoldId] IS NOT NULL AND [ExpiresAt] IS NOT NULL) OR ([Status] IN ('ALLOCATED', 'SOLD') AND [HoldId] IS NOT NULL AND [ExpiresAt] IS NULL)"));
         });
-        b.Entity<Hold>().ToTable(t => t.HasCheckConstraint("CK_Hold_Quote", "[Subtotal] > 0 AND [Fee] >= 0 AND [Total] = [Subtotal] + [Fee]"));
-        b.Entity<Order>().ToTable(t => t.HasCheckConstraint("CK_Order_Quote", "[Subtotal] > 0 AND [Fee] >= 0 AND [Total] = [Subtotal] + [Fee]"));
-        b.Entity<Ticket>().ToTable(t => t.HasCheckConstraint("CK_Ticket_State", "([IsActive] = 1 AND [Status] IN ('VALID', 'CHECKED_IN')) OR ([IsActive] = 0 AND [Status] = 'REFUNDED')"));
+        b.Entity<Hold>().ToTable(t => t.HasCheckConstraint("CK_Hold_Quote", Sql("[Subtotal] > 0 AND [Fee] >= 0 AND [Total] = [Subtotal] + [Fee]")));
+        b.Entity<Order>().ToTable(t => t.HasCheckConstraint("CK_Order_Quote", Sql("[Subtotal] > 0 AND [Fee] >= 0 AND [Total] = [Subtotal] + [Fee]")));
+        b.Entity<Ticket>().ToTable(t => t.HasCheckConstraint("CK_Ticket_State", Sql("([IsActive] = 1 AND [Status] IN ('VALID', 'CHECKED_IN')) OR ([IsActive] = 0 AND [Status] = 'REFUNDED')")));
 
     }
 }

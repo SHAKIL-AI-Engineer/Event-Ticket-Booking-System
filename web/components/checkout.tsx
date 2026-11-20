@@ -457,15 +457,24 @@ function StripePayment({
   async function confirm() {
     if (!stripe.current || !elements.current) return;
     setBusy(true);
-    const result = await stripe.current.confirmPayment({
-      elements: elements.current,
-      confirmParams: { return_url: location.origin + "/orders/" + orderId },
-      redirect: "if_required",
-    });
-    if (result.error) {
-      setError(result.error.message);
+    try {
+      const result = await stripe.current.confirmPayment({
+        elements: elements.current,
+        confirmParams: { return_url: location.origin + "/orders/" + orderId },
+        redirect: "if_required",
+      });
+      if (result.error) {
+        setError(result.error.message);
+        setBusy(false);
+      } else router.push("/orders/" + orderId);
+    } catch (e) {
+      setError(
+        (e as Error).message ||
+          "Payment connection interrupted. Check your existing order before retrying.",
+      );
+    } finally {
       setBusy(false);
-    } else router.push("/orders/" + orderId);
+    }
   }
   return (
     <div>
@@ -514,11 +523,19 @@ function OrderContent({ id }: { id: string }) {
   const state = view?.order.status;
   useEffect(() => {
     if (!state || !["PROCESSING", "PENDING"].includes(state)) return;
+    let pending = false;
     const timer = setInterval(() => {
-      void load().catch(() => {});
+      if (pending) return;
+      pending = true;
+      void api<OrderView>("/orders/" + id + "/reconcile", { method: "POST" })
+        .then(setView)
+        .catch(() => {})
+        .finally(() => {
+          pending = false;
+        });
     }, 3000);
     return () => clearInterval(timer);
-  }, [state, load]);
+  }, [state, id]);
   async function reconcile() {
     setBusy(true);
     try {
