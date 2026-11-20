@@ -1,0 +1,10 @@
+{
+  "name": "eventhub-platform",
+  "private": true,
+  "scripts": {
+    "dev": "bash scripts/dev.sh",
+    "build": "npm --prefix web run build",
+    "typecheck": "npm --prefix web run typecheck",
+    "test:api": "python scripts/test_api.py"
+  }
+}
